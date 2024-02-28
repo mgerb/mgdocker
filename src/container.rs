@@ -1,9 +1,11 @@
-use std::{
-    io::{BufRead, BufReader},
-    process::{Command, Stdio},
-};
+use std::process::{Command, Stdio};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio_stream::{wrappers::LinesStream, StreamExt};
 
 use anyhow::{Context, Result};
+use tokio::sync::broadcast;
+
+use crate::ContainerSseEvent;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Container {
@@ -66,33 +68,7 @@ impl Container {
         Ok(output)
     }
 
-    pub fn from_id() -> Result<Self> {
-        todo!()
-    }
-
-    pub fn get_config_dir(&self) -> Result<String> {
-        let output = Command::new("docker")
-            .arg("inspect")
-            .arg(&self.id)
-            .arg("--format")
-            .arg("'{{ index .Config.Labels \"com.docker.compose.project.config_files\" }}'")
-            .output()?;
-
-        let output = String::from_utf8(output.stdout)?;
-
-        let output = output.trim_matches('\'');
-
-        let output = output
-            .split("/")
-            .map(|val| val.to_string())
-            .collect::<Vec<String>>();
-
-        let output = (&output[0..output.len() - 1]).join("/");
-
-        Ok(output)
-    }
-
-    pub fn update(id: String) -> Result<(String, String)> {
+    pub async fn update(id: String, tx: &broadcast::Sender<ContainerSseEvent>) -> Result<()> {
         let output = Command::new("docker")
             .arg("inspect")
             .arg(&id)
@@ -111,7 +87,13 @@ impl Container {
 
         let output = (&output[0..output.len() - 1]).join("/");
 
-        let mut update = Command::new("docker")
+        tx.send(ContainerSseEvent {
+            event: id.clone(),
+            data: "docker compose pull\n".into(),
+        })
+        .context("stdout send error")?;
+
+        let mut update = tokio::process::Command::new("docker")
             .arg("compose")
             .arg("pull")
             .current_dir(output)
@@ -122,23 +104,30 @@ impl Container {
         let stdout = update.stdout.take().context("stdout take error")?;
         let stderr = update.stderr.take().context("stderr take error")?;
 
-        let mut s_out = String::new();
-        let mut e_out = String::new();
+        let stdout = LinesStream::new(BufReader::new(stdout).lines());
+        let stderr = LinesStream::new(BufReader::new(stderr).lines());
 
-        for ele in BufReader::new(stdout).lines() {
-            if let Ok(ele) = ele {
-                s_out.push_str(&ele);
-                s_out.push_str("\n");
-            }
+        let mut merged = StreamExt::merge(stdout, stderr);
+
+        while let Some(line) = merged.next().await {
+            let line = line?;
+            let evt = ContainerSseEvent {
+                event: id.clone(),
+                data: format!("{}\n", line),
+            };
+            tx.send(evt).context("stdout send error")?;
         }
 
-        for ele in BufReader::new(stderr).lines() {
-            if let Ok(ele) = ele {
-                e_out.push_str(&ele);
-                e_out.push_str("\n");
-            }
-        }
+        // NOTE: for testing purposes
+        // for _ in 0..100 {
+        //     let evt = ContainerSseEvent {
+        //         event: id.clone(),
+        //         data: "test 123\n".into(),
+        //     };
+        //     tx.send(evt).context("stdout send error")?;
+        //     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        // }
 
-        Ok((s_out, e_out))
+        Ok(())
     }
 }

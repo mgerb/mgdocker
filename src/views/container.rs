@@ -10,8 +10,14 @@ pub fn ContainerComponent(c: Container) -> impl IntoView {
             <summary>
                 {c.names}
             </summary>
-            <button hx-get={update_url} hx-swap="innerHTML" hx-target="next #update_results" hx-indicator="">Update</button>
-            <div id="loading" style="display:none">"Loading..."</div>
+            <button
+                hx-get={update_url}
+                hx-swap="innerHTML"
+                hx-target="next #update_results"
+                hx-indicator="next #loader">
+                "Pull"
+            </button>
+            <div id="loader" class="htmx-indicator">"Loading..."</div>
             <div id="update_results"></div>
             <div><b>"id: "</b>{c.id}</div>
             <div><b>"image: "</b> {c.image}</div>
@@ -43,5 +49,23 @@ pub fn ContainerListComponent(containers: Vec<Container>) -> impl IntoView {
                 }
             }
         />
+    }
+}
+
+#[component]
+pub fn ContainerUpdateComponent(id: String) -> impl IntoView {
+    let swap = format!("beforeend scroll:#{}:bottom", id.clone());
+    let sse_connect = format!("/sse/{}", id.clone());
+    view! {
+        <pre id=id.clone() style="max-height:20rem;overflow:auto;"
+             hx-on:htmx:after-settle="this.scrollTo(0, this.scrollHeight);"
+            >
+            <code
+                hx-ext="sse"
+                sse-connect=sse_connect
+                sse-swap=id.clone()
+                hx-swap=swap
+            ></code>
+        </pre>
     }
 }
