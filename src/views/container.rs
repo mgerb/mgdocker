@@ -1,24 +1,47 @@
 use leptos::*;
 
-use crate::container::Container;
+use crate::{container::Container, model::SseTask};
 
 #[component]
 pub fn ContainerComponent(c: Container) -> impl IntoView {
-    let update_url = format!("/containers/update/{}", c.id);
+    let pull_url = format!("/containers/{}/{}", c.names, SseTask::Pull);
+    let update_url = format!("/containers/{}/{}", c.names, SseTask::Update);
+    let config_url = format!("/containers/{}/{}", c.names, SseTask::GetConfig);
     view! {
         <details>
             <summary>
                 {c.names}
             </summary>
-            <button
-                hx-get={update_url}
-                hx-swap="innerHTML"
-                hx-target="next #update_results"
-                hx-indicator="next #loader">
-                "Pull"
-            </button>
+            <div style="display:flex;gap:0.5rem">
+                <button
+                    hx-get=pull_url
+                    hx-swap="innerHTML"
+                    hx-target="next #task_container"
+                    title="docker compose pull"
+                    hx-indicator="next #loader"
+                >
+                    "Pull"
+                </button>
+                <button
+                    hx-get=update_url
+                    hx-swap="innerHTML"
+                    hx-target="next #task_container"
+                    hx-indicator="next #loader"
+                    title="docker compose down && docker compose up -d"
+                >
+                    "Update"
+                </button>
+                <button
+                    hx-get=config_url
+                    hx-swap="innerHTML"
+                    hx-target="next #task_container"
+                    hx-indicator="next #loader"
+                >
+                    "View Config"
+                </button>
+            </div>
             <div id="loader" class="htmx-indicator">"Loading..."</div>
-            <div id="update_results"></div>
+            <div id="task_container"></div>
             <div><b>"id: "</b>{c.id}</div>
             <div><b>"image: "</b> {c.image}</div>
             <div><b>"status: "</b> {c.status}</div>
@@ -45,7 +68,7 @@ pub fn ContainerListComponent(containers: Vec<Container>) -> impl IntoView {
             key=|c| c.id.clone()
             children=move |c: Container| {
                 view! {
-                    <ContainerComponent c={c} />
+                    <ContainerComponent c=c />
                 }
             }
         />
@@ -53,18 +76,17 @@ pub fn ContainerListComponent(containers: Vec<Container>) -> impl IntoView {
 }
 
 #[component]
-pub fn ContainerUpdateComponent(id: String) -> impl IntoView {
-    let swap = format!("beforeend scroll:#{}:bottom", id.clone());
-    let sse_connect = format!("/sse/{}", id.clone());
+pub fn ContainerSseResultsComponent(name: String, task: SseTask) -> impl IntoView {
+    let sse_connect = format!("/containers/sse/{}/{}", name.clone(), task);
     view! {
-        <pre id=id.clone() style="max-height:20rem;overflow:auto;"
+        <pre id=name.clone() style="max-height:20rem;overflow:auto;"
              hx-on:htmx:after-settle="this.scrollTo(0, this.scrollHeight);"
             >
             <code
                 hx-ext="sse"
                 sse-connect=sse_connect
-                sse-swap=id.clone()
-                hx-swap=swap
+                sse-swap=name.clone()
+                hx-swap="beforeend"
             ></code>
         </pre>
     }

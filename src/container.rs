@@ -68,17 +68,28 @@ impl Container {
         Ok(output)
     }
 
-    pub async fn update(id: String, tx: &broadcast::Sender<ContainerSseEvent>) -> Result<()> {
+    fn get_compose_config_file_path(name: String) -> Result<String> {
         let output = Command::new("docker")
             .arg("inspect")
-            .arg(&id)
+            .arg(&name)
             .arg("--format")
             .arg("'{{ index .Config.Labels \"com.docker.compose.project.config_files\" }}'")
             .output()?;
 
         let output = String::from_utf8(output.stdout)?;
 
-        let output = output.trim_matches('\'');
+        if output.is_empty() {
+            return Err(anyhow::anyhow!("no compose file found"));
+        }
+
+        let output = output.replace("'", "");
+        let output = output.trim(); // remove newline
+
+        Ok(output.into())
+    }
+
+    fn get_compose_dir(name: String) -> Result<String> {
+        let output = Self::get_compose_config_file_path(name)?;
 
         let output = output
             .split("/")
@@ -87,22 +98,22 @@ impl Container {
 
         let output = (&output[0..output.len() - 1]).join("/");
 
-        tx.send(ContainerSseEvent {
-            event: id.clone(),
-            data: "docker compose pull\n".into(),
-        })
-        .context("stdout send error")?;
+        Ok(output)
+    }
 
-        let mut update = tokio::process::Command::new("docker")
-            .arg("compose")
-            .arg("pull")
-            .current_dir(output)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-
-        let stdout = update.stdout.take().context("stdout take error")?;
-        let stderr = update.stderr.take().context("stderr take error")?;
+    async fn execute_command(
+        name: &str,
+        mut cmd: tokio::process::Child,
+        tx: &broadcast::Sender<ContainerSseEvent>,
+    ) -> Result<()> {
+        let stdout = cmd
+            .stdout
+            .take()
+            .context("execute_command: stdout take error")?;
+        let stderr = cmd
+            .stderr
+            .take()
+            .context("execute_command: stderr take error")?;
 
         let stdout = LinesStream::new(BufReader::new(stdout).lines());
         let stderr = LinesStream::new(BufReader::new(stderr).lines());
@@ -112,21 +123,97 @@ impl Container {
         while let Some(line) = merged.next().await {
             let line = line?;
             let evt = ContainerSseEvent {
-                event: id.clone(),
+                event: name.into(),
                 data: format!("{}\n", line),
             };
-            tx.send(evt).context("stdout send error")?;
+            tx.send(evt).context("execute_command: stdout send error")?;
         }
 
-        // NOTE: for testing purposes
-        // for _ in 0..100 {
-        //     let evt = ContainerSseEvent {
-        //         event: id.clone(),
-        //         data: "test 123\n".into(),
-        //     };
-        //     tx.send(evt).context("stdout send error")?;
-        //     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        // }
+        Ok(())
+    }
+
+    /// docker compose pull
+    /// broadcast the stdout and stderr results to the sender
+    pub async fn pull(name: String, tx: &broadcast::Sender<ContainerSseEvent>) -> Result<()> {
+        let dir = Self::get_compose_dir(name.clone())?;
+
+        tx.send(ContainerSseEvent {
+            event: name.clone(),
+            data: "docker compose pull\n".into(),
+        })
+        .context("pull: stdout send error")?;
+
+        let cmd = tokio::process::Command::new("docker")
+            .arg("compose")
+            .arg("pull")
+            .current_dir(dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        Self::execute_command(&name, cmd, tx).await?;
+
+        Ok(())
+    }
+
+    // docker compose pull && docker compose up -d
+    pub async fn update(name: String, tx: &broadcast::Sender<ContainerSseEvent>) -> Result<()> {
+        let dir = Self::get_compose_dir(name.clone())?;
+
+        tx.send(ContainerSseEvent {
+            event: name.clone(),
+            data: "docker compose down\n".into(),
+        })
+        .context("update: stdout send error")?;
+
+        let down = tokio::process::Command::new("docker")
+            .arg("compose")
+            .arg("down")
+            .current_dir(&dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        Self::execute_command(&name, down, tx).await?;
+
+        tx.send(ContainerSseEvent {
+            event: name.clone(),
+            data: "\ndocker compose up -d\n".into(),
+        })
+        .context("update: stdout send error")?;
+
+        let up = tokio::process::Command::new("docker")
+            .arg("compose")
+            .arg("up")
+            .arg("-d")
+            .current_dir(&dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        Self::execute_command(&name, up, tx).await?;
+
+        Ok(())
+    }
+
+    pub async fn get_config(name: String, tx: &broadcast::Sender<ContainerSseEvent>) -> Result<()> {
+        let config_file_path = Self::get_compose_config_file_path(name.clone())?;
+
+        let file = tokio::fs::File::open(config_file_path).await?;
+        let reader = BufReader::new(file);
+
+        let mut lines = reader.lines();
+        let mut output: Vec<String> = vec![];
+
+        while let Some(line) = lines.next_line().await? {
+            output.push(line);
+        }
+
+        tx.send(ContainerSseEvent {
+            event: name.clone(),
+            data: output.join("\n"),
+        })
+        .context("get_config: stdout send error")?;
 
         Ok(())
     }

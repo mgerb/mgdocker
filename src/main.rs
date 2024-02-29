@@ -1,10 +1,13 @@
 mod container;
+mod model;
 mod util;
 mod views;
 
+use model::SseTask;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
+use anyhow::Context;
 use axum::{
     extract::{Path, State},
     response::{sse::Event, Html, Sse},
@@ -17,21 +20,13 @@ use leptos::*;
 use util::AppError;
 use views::{
     container::{
-        ContainerListComponent, ContainerListComponentProps, ContainerUpdateComponent,
-        ContainerUpdateComponentProps,
+        ContainerListComponent, ContainerListComponentProps, ContainerSseResultsComponent,
+        ContainerSseResultsComponentProps,
     },
     index::IndexComponent,
 };
 
-#[derive(Debug, Clone, serde::Deserialize)]
-struct ContainerSseEvent {
-    event: String,
-    data: String,
-}
-
-struct AppState {
-    pub tx: broadcast::Sender<ContainerSseEvent>,
-}
+use crate::model::{AppState, ContainerSseEvent};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -50,9 +45,9 @@ async fn main() -> anyhow::Result<()> {
                 )
             }),
         )
-        .route("/sse/:id", get(sse_handler))
         .route("/containers", get(get_containers))
-        .route("/containers/update/:id", get(get_containers_update))
+        .route("/containers/sse/:name/:task", get(sse_handler))
+        .route("/containers/:name/:task", get(get_containers_task))
         .route("/", get(get_index))
         .with_state(app_state);
 
@@ -64,9 +59,14 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn get_containers_update(Path(id): Path<String>) -> Result<Html<String>, AppError> {
-    let props = ContainerUpdateComponentProps { id };
-    let view = ssr::render_to_string(|| ContainerUpdateComponent(props));
+async fn get_containers_task(
+    Path((name, task)): Path<(String, String)>,
+) -> Result<Html<String>, AppError> {
+    let props = ContainerSseResultsComponentProps {
+        name,
+        task: SseTask::from_str(&task).context("get_containers_task: invalid task")?,
+    };
+    let view = ssr::render_to_string(|| ContainerSseResultsComponent(props));
     Ok(Html(view.into()))
 }
 
@@ -85,7 +85,7 @@ async fn get_index() -> Result<Html<String>, AppError> {
 
 async fn sse_handler(
     State(app_state): State<Arc<AppState>>,
-    Path(id): Path<String>,
+    Path((name, task)): Path<(String, String)>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, anyhow::Error>>>, AppError> {
     let mut rx = app_state.tx.subscribe();
 
@@ -109,9 +109,37 @@ async fn sse_handler(
 
     let app_state = app_state.clone();
 
-    tokio::spawn(async move {
-        let _ = Container::update(id, &app_state.tx).await;
-    });
+    let task = SseTask::from_str(&task);
+
+    match task {
+        Some(SseTask::Update) => {
+            tokio::spawn(async move {
+                match Container::update(name, &app_state.tx).await {
+                    Ok(_) => {}
+                    Err(e) => tracing::error!("sse_handler update error: {}", e),
+                }
+            });
+        }
+        Some(SseTask::Pull) => {
+            tokio::spawn(async move {
+                match Container::pull(name, &app_state.tx).await {
+                    Ok(_) => {}
+                    Err(e) => tracing::error!("sse_handler pull error: {}", e),
+                }
+            });
+        }
+        Some(SseTask::GetConfig) => {
+            tokio::spawn(async move {
+                match Container::get_config(name, &app_state.tx).await {
+                    Ok(_) => {}
+                    Err(e) => tracing::error!("sse_handler get config error: {}", e),
+                }
+            });
+        }
+        None => {
+            tracing::error!("error: invalid task in sse handler");
+        }
+    }
 
     return Ok(Sse::new(stream));
 }
