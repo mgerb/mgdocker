@@ -1,9 +1,11 @@
+mod components;
 mod container;
+mod image;
 mod model;
 mod util;
-mod views;
 
-use model::SseTask;
+use image::Image;
+use model::{AppPage, SseTask};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
@@ -17,22 +19,21 @@ use container::Container;
 use futures::stream::Stream;
 use leptos::*;
 
-use util::AppError;
-use views::{
-    container::{
-        ContainerListComponent, ContainerListComponentProps, ContainerSseResultsComponent,
-        ContainerSseResultsComponentProps,
-    },
-    index::IndexComponent,
+use components::{
+    container::{ContainerListComponent, ContainerListComponentProps},
+    images::{ImagesComponent, ImagesComponentProps},
+    index::{IndexComponent, IndexComponentProps},
+    shared::sse::{SseResultsComponent, SseResultsComponentProps},
 };
+use util::AppError;
 
-use crate::model::{AppState, ContainerSseEvent};
+use crate::model::{AppState, SseEvent};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
-    let (tx, _) = broadcast::channel::<ContainerSseEvent>(1000);
+    let (tx, _) = broadcast::channel::<SseEvent>(1000);
     let app_state = Arc::new(AppState { tx });
 
     let app = axum::Router::new()
@@ -45,10 +46,15 @@ async fn main() -> anyhow::Result<()> {
                 )
             }),
         )
-        .route("/containers", get(get_containers))
-        .route("/containers/sse/:name/:task", get(sse_handler))
-        .route("/containers/:name/:task", get(get_containers_task))
-        .route("/", get(get_index))
+        .route("/components/containers", get(get_containers))
+        .route("/components/shared/sse/:name/:task", get(get_sse_task))
+        .route(
+            "/components/shared/sse/connect/:name/:task",
+            get(sse_connect_handler),
+        )
+        .route("/components/images", get(get_images))
+        .route("/", get(get_index_page))
+        .route("/images", get(get_images_page))
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:2999").await?;
@@ -59,17 +65,6 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn get_containers_task(
-    Path((name, task)): Path<(String, String)>,
-) -> Result<Html<String>, AppError> {
-    let props = ContainerSseResultsComponentProps {
-        name,
-        task: SseTask::from_str(&task).context("get_containers_task: invalid task")?,
-    };
-    let view = ssr::render_to_string(|| ContainerSseResultsComponent(props));
-    Ok(Html(view.into()))
-}
-
 async fn get_containers() -> Result<Html<String>, AppError> {
     let containers = Container::get_all()?;
     let containers = ContainerListComponentProps { containers };
@@ -77,13 +72,46 @@ async fn get_containers() -> Result<Html<String>, AppError> {
     Ok(Html(view.into()))
 }
 
-async fn get_index() -> Result<Html<String>, AppError> {
-    let view = ssr::render_to_string(|| IndexComponent());
-    // add doctype here because leptos strips it
-    Ok(Html(format!("<!DOCTYPE html>{}", view.to_string())))
+async fn get_images() -> Result<Html<String>, AppError> {
+    let images = Image::get_all()?;
+    let props = ImagesComponentProps { images };
+    let view = ssr::render_to_string(|| ImagesComponent(props));
+    Ok(Html(view.into()))
 }
 
-async fn sse_handler(
+async fn get_index_page() -> Result<Html<String>, AppError> {
+    let props = IndexComponentProps {
+        app_page: AppPage::Index,
+    };
+    let view = ssr::render_to_string(|| IndexComponent(props));
+    Ok(render_index(view.to_string()))
+}
+
+async fn get_images_page() -> Result<Html<String>, AppError> {
+    let props = IndexComponentProps {
+        app_page: AppPage::Images,
+    };
+    let view = ssr::render_to_string(|| IndexComponent(props));
+    Ok(render_index(view.to_string()))
+}
+
+fn render_index(view: String) -> Html<String> {
+    // add doctype here because leptos strips it
+    Html(format!("<!DOCTYPE html>{}", view))
+}
+
+async fn get_sse_task(
+    Path((name, task)): Path<(String, String)>,
+) -> Result<Html<String>, AppError> {
+    let props = SseResultsComponentProps {
+        name,
+        task: SseTask::from_str(&task).context("get_containers_task: invalid task")?,
+    };
+    let view = ssr::render_to_string(|| SseResultsComponent(props));
+    Ok(Html(view.into()))
+}
+
+async fn sse_connect_handler(
     State(app_state): State<Arc<AppState>>,
     Path((name, task)): Path<(String, String)>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, anyhow::Error>>>, AppError> {
@@ -91,9 +119,11 @@ async fn sse_handler(
 
     let stream = async_stream::stream! {
         loop {
-
             match rx.recv().await {
                 Ok(evt) => {
+                    if evt.event == "Done" {
+                        break;
+                    }
                     let res: Result<_, anyhow::Error> = Ok(Event::default().data(evt.data).event(evt.event));
                     yield res;
                 }
@@ -133,6 +163,14 @@ async fn sse_handler(
                 match Container::get_config(name, &app_state.tx).await {
                     Ok(_) => {}
                     Err(e) => tracing::error!("sse_handler get config error: {}", e),
+                }
+            });
+        }
+        Some(SseTask::PruneImages) => {
+            tokio::spawn(async move {
+                match Image::prune(SseTask::PruneImages.to_str(), &app_state.tx).await {
+                    Ok(_) => {}
+                    Err(e) => tracing::error!("sse_handler prune images error: {}", e),
                 }
             });
         }

@@ -1,9 +1,9 @@
 use leptos::{component, view, IntoView};
 
-use crate::views::app::AppComponent;
+use crate::{components::app::AppComponent, model::AppPage};
 
 #[component]
-pub fn IndexComponent() -> impl IntoView {
+pub fn IndexComponent(app_page: AppPage) -> impl IntoView {
     view! {
         <html>
             <head>
@@ -14,7 +14,7 @@ pub fn IndexComponent() -> impl IntoView {
                 <script src="https://unpkg.com/htmx.org/dist/ext/sse.js"></script>
             </head>
             <body>
-                <AppComponent />
+                <AppComponent app_page=app_page/>
             </body>
         </html>
     }

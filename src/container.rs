@@ -1,11 +1,10 @@
 use std::process::{Command, Stdio};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio_stream::{wrappers::LinesStream, StreamExt};
 
 use anyhow::{Context, Result};
 use tokio::sync::broadcast;
 
-use crate::ContainerSseEvent;
+use crate::{util, SseEvent};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Container {
@@ -101,43 +100,12 @@ impl Container {
         Ok(output)
     }
 
-    async fn execute_command(
-        name: &str,
-        mut cmd: tokio::process::Child,
-        tx: &broadcast::Sender<ContainerSseEvent>,
-    ) -> Result<()> {
-        let stdout = cmd
-            .stdout
-            .take()
-            .context("execute_command: stdout take error")?;
-        let stderr = cmd
-            .stderr
-            .take()
-            .context("execute_command: stderr take error")?;
-
-        let stdout = LinesStream::new(BufReader::new(stdout).lines());
-        let stderr = LinesStream::new(BufReader::new(stderr).lines());
-
-        let mut merged = StreamExt::merge(stdout, stderr);
-
-        while let Some(line) = merged.next().await {
-            let line = line?;
-            let evt = ContainerSseEvent {
-                event: name.into(),
-                data: format!("{}\n", line),
-            };
-            tx.send(evt).context("execute_command: stdout send error")?;
-        }
-
-        Ok(())
-    }
-
     /// docker compose pull
     /// broadcast the stdout and stderr results to the sender
-    pub async fn pull(name: String, tx: &broadcast::Sender<ContainerSseEvent>) -> Result<()> {
+    pub async fn pull(name: String, tx: &broadcast::Sender<SseEvent>) -> Result<()> {
         let dir = Self::get_compose_dir(name.clone())?;
 
-        tx.send(ContainerSseEvent {
+        tx.send(SseEvent {
             event: name.clone(),
             data: "docker compose pull\n".into(),
         })
@@ -151,16 +119,16 @@ impl Container {
             .stderr(Stdio::piped())
             .spawn()?;
 
-        Self::execute_command(&name, cmd, tx).await?;
+        util::execute_command(&name, cmd, tx).await?;
 
         Ok(())
     }
 
     // docker compose pull && docker compose up -d
-    pub async fn update(name: String, tx: &broadcast::Sender<ContainerSseEvent>) -> Result<()> {
+    pub async fn update(name: String, tx: &broadcast::Sender<SseEvent>) -> Result<()> {
         let dir = Self::get_compose_dir(name.clone())?;
 
-        tx.send(ContainerSseEvent {
+        tx.send(SseEvent {
             event: name.clone(),
             data: "docker compose down\n".into(),
         })
@@ -174,9 +142,9 @@ impl Container {
             .stderr(Stdio::piped())
             .spawn()?;
 
-        Self::execute_command(&name, down, tx).await?;
+        util::execute_command(&name, down, tx).await?;
 
-        tx.send(ContainerSseEvent {
+        tx.send(SseEvent {
             event: name.clone(),
             data: "\ndocker compose up -d\n".into(),
         })
@@ -191,12 +159,12 @@ impl Container {
             .stderr(Stdio::piped())
             .spawn()?;
 
-        Self::execute_command(&name, up, tx).await?;
+        util::execute_command(&name, up, tx).await?;
 
         Ok(())
     }
 
-    pub async fn get_config(name: String, tx: &broadcast::Sender<ContainerSseEvent>) -> Result<()> {
+    pub async fn get_config(name: String, tx: &broadcast::Sender<SseEvent>) -> Result<()> {
         let config_file_path = Self::get_compose_config_file_path(name.clone())?;
 
         let file = tokio::fs::File::open(config_file_path).await?;
@@ -209,7 +177,7 @@ impl Container {
             output.push(line);
         }
 
-        tx.send(ContainerSseEvent {
+        tx.send(SseEvent {
             event: name.clone(),
             data: output.join("\n"),
         })

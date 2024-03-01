@@ -6,13 +6,19 @@ use std::{
 use tokio::sync::broadcast;
 
 #[derive(Debug, Clone, serde::Deserialize)]
-pub struct ContainerSseEvent {
+pub struct SseEvent {
     pub event: String,
     pub data: String,
 }
 
 pub struct AppState {
-    pub tx: broadcast::Sender<ContainerSseEvent>,
+    pub tx: broadcast::Sender<SseEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AppPage {
+    Index,
+    Images,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -20,6 +26,7 @@ pub enum SseTask {
     Update,
     Pull,
     GetConfig,
+    PruneImages,
 }
 
 impl SseTask {
@@ -28,6 +35,7 @@ impl SseTask {
             Self::Update => "update",
             Self::Pull => "pull",
             Self::GetConfig => "get_config",
+            Self::PruneImages => "prune_images",
         }
     }
 
@@ -36,6 +44,7 @@ impl SseTask {
             "update" => Some(Self::Update),
             "pull" => Some(Self::Pull),
             "get_config" => Some(Self::GetConfig),
+            "prune_images" => Some(Self::PruneImages),
             _ => None,
         }
     }

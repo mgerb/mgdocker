@@ -4,9 +4,9 @@ use crate::{container::Container, model::SseTask};
 
 #[component]
 pub fn ContainerComponent(c: Container) -> impl IntoView {
-    let pull_url = format!("/containers/{}/{}", c.names, SseTask::Pull);
-    let update_url = format!("/containers/{}/{}", c.names, SseTask::Update);
-    let config_url = format!("/containers/{}/{}", c.names, SseTask::GetConfig);
+    let pull_url = format!("/components/shared/sse/{}/{}", c.names, SseTask::Pull);
+    let update_url = format!("/components/shared/sse/{}/{}", c.names, SseTask::Update);
+    let config_url = format!("/components/shared/sse/{}/{}", c.names, SseTask::GetConfig);
     view! {
         <details>
             <summary>
@@ -16,17 +16,17 @@ pub fn ContainerComponent(c: Container) -> impl IntoView {
                 <button
                     hx-get=pull_url
                     hx-swap="innerHTML"
-                    hx-target="next #task_container"
+                    hx-target="next #container_task_container"
                     title="docker compose pull"
-                    hx-indicator="next #loader"
+                    hx-indicator="next .loader"
                 >
                     "Pull"
                 </button>
                 <button
                     hx-get=update_url
                     hx-swap="innerHTML"
-                    hx-target="next #task_container"
-                    hx-indicator="next #loader"
+                    hx-target="next #container_task_container"
+                    hx-indicator="next .loader"
                     title="docker compose down && docker compose up -d"
                 >
                     "Update"
@@ -34,14 +34,14 @@ pub fn ContainerComponent(c: Container) -> impl IntoView {
                 <button
                     hx-get=config_url
                     hx-swap="innerHTML"
-                    hx-target="next #task_container"
-                    hx-indicator="next #loader"
+                    hx-target="next #container_task_container"
+                    hx-indicator="next .loader"
                 >
                     "View Config"
                 </button>
             </div>
-            <div id="loader" class="htmx-indicator">"Loading..."</div>
-            <div id="task_container"></div>
+            <div class="loader htmx-indicator">"Loading..."</div>
+            <div id="container_task_container"></div>
             <div><b>"id: "</b>{c.id}</div>
             <div><b>"image: "</b> {c.image}</div>
             <div><b>"status: "</b> {c.status}</div>
@@ -72,22 +72,5 @@ pub fn ContainerListComponent(containers: Vec<Container>) -> impl IntoView {
                 }
             }
         />
-    }
-}
-
-#[component]
-pub fn ContainerSseResultsComponent(name: String, task: SseTask) -> impl IntoView {
-    let sse_connect = format!("/containers/sse/{}/{}", name.clone(), task);
-    view! {
-        <pre id=name.clone() style="max-height:20rem;overflow:auto;"
-             hx-on:htmx:after-settle="this.scrollTo(0, this.scrollHeight);"
-            >
-            <code
-                hx-ext="sse"
-                sse-connect=sse_connect
-                sse-swap=name.clone()
-                hx-swap="beforeend"
-            ></code>
-        </pre>
     }
 }
