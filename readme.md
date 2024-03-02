@@ -8,6 +8,7 @@ A web application for managing docker containers. Built for my personal needs.
 - [leptos](https://github.com/leptos-rs/leptos)
 - [htmx](https://htmx.org/)
 - [axum](https://github.com/tokio-rs/axum)
+- [simple.css](https://simplecss.org/)
 
 ## Features
 - docker compose pull
