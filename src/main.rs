@@ -1,36 +1,37 @@
+mod args;
 mod components;
 mod container;
 mod image;
 mod model;
 mod util;
 
-use image::Image;
-use model::{AppPage, SseTask};
-use std::sync::Arc;
-use tokio::sync::broadcast;
-
+use crate::model::{AppState, SseEvent};
 use anyhow::Context;
 use axum::{
     extract::{Path, State},
     response::{sse::Event, Html, Sse},
     routing::get,
 };
-use container::Container;
-use futures::stream::Stream;
-use leptos::*;
-
+use clap::Parser;
 use components::{
     container::{ContainerListComponent, ContainerListComponentProps},
     images::{ImagesComponent, ImagesComponentProps},
     index::{IndexComponent, IndexComponentProps},
     shared::sse::{SseResultsComponent, SseResultsComponentProps},
 };
+use container::Container;
+use futures::stream::Stream;
+use image::Image;
+use leptos::*;
+use model::{AppPage, SseTask};
+use std::sync::Arc;
+use tokio::sync::broadcast;
 use util::AppError;
-
-use crate::model::{AppState, SseEvent};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let args = args::Args::parse();
+
     tracing_subscriber::fmt::init();
 
     let (tx, _) = broadcast::channel::<SseEvent>(1000);
@@ -57,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/images", get(get_images_page))
         .with_state(app_state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:2999").await?;
+    let listener = tokio::net::TcpListener::bind(format!("{}:{}", args.host, args.port)).await?;
 
     tracing::debug!("listening on {}", listener.local_addr()?);
     axum::serve(listener, app).await?;
